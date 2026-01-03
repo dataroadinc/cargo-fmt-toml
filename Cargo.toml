@@ -1,0 +1,59 @@
+[package]
+name = "cargo-fmt-toml"
+description = "Cargo subcommand to format and normalize Cargo.toml files according to workspace standards"
+version = "0.0.1"
+edition = "2024"
+license-file = "LICENSE"
+keywords = ["cargo", "toml", "format", "cli", "workspace"]
+categories = ["command-line-utilities", "development-tools"]
+readme = "README.md"
+authors = ["Jacobus Geluk <jacobus@dataroad.com>"]
+repository = "https://github.com/agnos-ai/cargo-fmt-toml"
+documentation = "https://docs.rs/cargo-fmt-toml"
+homepage = "https://github.com/agnos-ai/cargo-fmt-toml"
+rust-version = "1.92.0"
+publish = true
+
+exclude = [
+    ".cargo/",
+    ".cargo-husky/",
+    ".clippy.toml",
+    ".cursor/",
+    ".github/",
+    ".gitignore",
+    ".rust-toolchain.toml",
+    ".vscode/",
+    "cog.toml",
+    "rustfmt.toml",
+]
+
+[[bin]]
+name = "cargo-fmt-toml"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4.5.53", default-features = false, features = [
+    "derive",
+    "env",
+    "std",
+] }
+indicatif = "0.18.3"
+serde = { version = "1", features = ["derive"] }
+taplo = "0.14.0"
+toml = "0.9.8"
+toml_edit = "0.23.9"
+walkdir = "2.5.0"
+
+[build-dependencies]
+cargo-version-info = { version = "0.0.2", default-features = false }
+
+[dev-dependencies]
+cargo-husky = { version = "1", default-features = false, features = [
+    "user-hooks",
+] }
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "zip"
