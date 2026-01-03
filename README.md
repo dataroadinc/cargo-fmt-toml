@@ -9,6 +9,25 @@
 Cargo subcommand to format and normalize `Cargo.toml` files according
 to workspace standards.
 
+## Installation
+
+### Using cargo-binstall (Recommended)
+
+The fastest way to install pre-built binaries:
+
+```bash
+cargo install cargo-binstall
+cargo binstall cargo-fmt-toml
+```
+
+### Using cargo install
+
+Build from source (slower, requires Rust toolchain):
+
+```bash
+cargo install cargo-fmt-toml
+```
+
 ## Features
 
 1. **Workspace Dependencies**: Ensures all dependency versions are
