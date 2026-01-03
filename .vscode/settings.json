@@ -1,0 +1,40 @@
+{
+    "editor.formatOnSave": true,
+    "[rust]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "rust-lang.rust-analyzer"
+    },
+    "[markdown]": {
+        "editor.rulers": [70],
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "editor.formatOnSave": true,
+        "editor.wordWrap": "bounded",
+        "editor.wordWrapColumn": 70
+    },
+    "markdownlint.config": {
+        "MD013": {
+            "line_length": 70,
+            "code_blocks": false,
+            "tables": false,
+            "headings": false,
+            "headings_line_length": false
+        }
+    },
+    "prettier.printWidth": 70,
+    "prettier.proseWrap": "always",
+    "rust-analyzer.rustfmt.extraArgs": [
+        "+nightly"
+    ],
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.check.extraArgs": [
+        "--",
+        "-W",
+        "missing_docs",
+        "-W",
+        "clippy::missing_errors_doc",
+        "-W",
+        "clippy::missing_panics_doc",
+        "-W",
+        "clippy::missing_safety_doc"
+    ]
+}
