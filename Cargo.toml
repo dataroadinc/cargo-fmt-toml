@@ -46,11 +46,9 @@ cargo-plugin-utils = { path = "../cargo-plugin-utils" }
 
 [build-dependencies]
 cargo-version-info = { version = "0.0.3", default-features = false }
+sloughi = "0.3"
 
 [dev-dependencies]
-cargo-husky = { version = "1", default-features = false, features = [
-    "user-hooks",
-] }
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/v{ version }/{ name }-{ target }.{ archive-format }"

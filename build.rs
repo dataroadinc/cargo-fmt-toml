@@ -10,6 +10,12 @@
 use cargo_version_info::commands::compute_version_string;
 
 fn main() {
+    // Install git hooks via sloughi
+    let _ = sloughi::Sloughi::new()
+        .custom_path(".githooks")
+        .ignore_env("CI")
+        .ignore_env("GITHUB_ACTIONS")
+        .install();
     // Compute version for repository root
     let version = match compute_version_string(".") {
         Ok(v) => v,
