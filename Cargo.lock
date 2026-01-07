@@ -333,7 +333,9 @@ dependencies = [
 
 [[package]]
 name = "cargo-plugin-utils"
-version = "0.0.1"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5cbf0e42b1a8f95d44274dce2c95aabc6e693a0043c03a3e773439d83ede81f8"
 dependencies = [
  "anyhow",
  "atty",
