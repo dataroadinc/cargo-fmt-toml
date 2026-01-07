@@ -210,7 +210,7 @@ jobs:
         run: |
           echo "🎉 Successfully released v${{ needs.version-check.outputs.new_version }}"
           echo "📦 Published to crates.io: https://crates.io/crates/cargo-fmt-toml"
-          echo "📝 GitHub Release: https://github.com/agnos-ai/cargo-fmt-toml/releases/tag/v${{ needs.version-check.outputs.new_version }}"
+          echo "📝 GitHub Release: https://github.com/dataroadinc/cargo-fmt-toml/releases/tag/v${{ needs.version-check.outputs.new_version }}"
           echo "📚 Documentation: https://docs.rs/cargo-fmt-toml/${{ needs.version-check.outputs.new_version }}"
 
   build-and-upload-binaries:

@@ -2,8 +2,8 @@
 
 [![Crates.io](https://img.shields.io/crates/v/cargo-fmt-toml.svg)](https://crates.io/crates/cargo-fmt-toml)
 [![Documentation](https://docs.rs/cargo-fmt-toml/badge.svg)](https://docs.rs/cargo-fmt-toml)
-[![CI](https://github.com/agnos-ai/cargo-fmt-toml/workflows/CI%2FCD/badge.svg)](https://github.com/agnos-ai/cargo-fmt-toml/actions)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/agnos-ai/cargo-fmt-toml/blob/main/LICENSE)
+[![CI](https://github.com/dataroadinc/cargo-fmt-toml/workflows/CI%2FCD/badge.svg)](https://github.com/dataroadinc/cargo-fmt-toml/actions)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/dataroadinc/cargo-fmt-toml/blob/main/LICENSE)
 [![Downloads](https://img.shields.io/crates/d/cargo-fmt-toml.svg)](https://crates.io/crates/cargo-fmt-toml)
 
 Cargo subcommand to format and normalize `Cargo.toml` files according

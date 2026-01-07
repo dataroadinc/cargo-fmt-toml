@@ -38,7 +38,7 @@ To ensure all commits are signed, configure branch protection rules:
 gh api repos/agnos-ai/cargo-fmt-toml/branches/main/protection
 
 # Or check in the web UI:
-# https://github.com/agnos-ai/cargo-fmt-toml/settings/branch_protection_rules
+# https://github.com/dataroadinc/cargo-fmt-toml/settings/branch_protection_rules
 ```
 
 ### Required Branch Protection Rules
