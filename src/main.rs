@@ -31,11 +31,12 @@ use toml_edit::{
 #[command(
     name = "cargo-fmt-toml",
     about = "Format and normalize Cargo.toml files according to workspace standards",
-    bin_name = "cargo"
+    bin_name = "cargo",
+    version
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Parser, Debug)]
@@ -67,7 +68,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::FmtToml(args) => fmt_toml(args),
+        Some(Command::FmtToml(args)) => fmt_toml(args),
+        None => {
+            // When invoked without a subcommand, show help
+            use clap::CommandFactory;
+            Cli::command().print_help()?;
+            Ok(())
+        }
     }
 }
 
