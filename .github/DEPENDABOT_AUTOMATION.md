@@ -3,11 +3,37 @@
 This repository uses automated dependency management with Dependabot,
 including automatic merging and publishing.
 
+## Overview
+
+```text
+Sunday 10 PM UTC
+       ↓
+Dependabot scans for updates
+       ↓
+Creates grouped PR with all patch/minor updates
+       ↓
+CI workflow runs (Format, Clippy, Tests)
+       ↓
+Auto-merge workflow approves PR
+       ↓
+PR merges automatically (after CI passes)
+       ↓
+Version bump workflow triggers
+       ↓
+Patch version bumped (e.g., 0.1.2 → 0.1.3)
+       ↓
+Git tag created (v0.1.3)
+       ↓
+GitHub Release created
+       ↓
+Published to crates.io
+```
+
 ## How It Works
 
-### 1. Weekly Dependency Updates (Mondays 2 AM UTC)
+### 1. Weekly Dependency Updates (Sundays 10 PM UTC)
 
-Dependabot checks for dependency updates every Monday at 2 AM UTC and
+Dependabot checks for dependency updates every Sunday at 10 PM UTC and
 creates a **single grouped pull request** containing all patch and
 minor updates.
 
@@ -146,8 +172,8 @@ Edit `.github/dependabot.yml`:
 ```yaml
 schedule:
   interval: "daily" # Options: daily, weekly, monthly
-  day: "monday" # For weekly: monday-sunday
-  time: "02:00" # Time in UTC
+  day: "sunday" # For weekly: monday-sunday
+  time: "22:00" # Time in UTC
 ```
 
 ### Exclude Specific Dependencies
@@ -189,6 +215,34 @@ This shouldn't happen with grouping enabled, but if it does:
 1. Check that `groups` configuration is present in `dependabot.yml`
 2. Reduce `open-pull-requests-limit`
 3. Consider changing to monthly schedule
+
+## Design Decisions
+
+### Linear History (Rebase-Only)
+
+Auto-merge uses `--rebase` to maintain linear history. No merge
+commits are created by automation, keeping the git history clean and
+compatible with `git bisect`.
+
+### Conventional Commits Throughout
+
+- **Dependabot PRs:** Prefixed with `build(deps):` (configured in
+  `dependabot.yml`)
+- **Version bump commits:** Created by Cocogitto with `chore(version):`
+  prefix
+- Enables automatic changelog generation
+
+### Cocogitto for Version Management
+
+Uses `cog bump --patch` instead of manual git tagging. This
+automatically creates conventional commits for version bumps and
+integrates with the existing `cog.toml` configuration.
+
+### Single Token Architecture
+
+- Uses existing `CRATES_IO_TOKEN` for publishing
+- Dependabot uses `GITHUB_TOKEN` (automatic, no setup needed)
+- No separate token for Dependabot required
 
 ## Security Considerations
 

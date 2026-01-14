@@ -58,7 +58,7 @@ gh api repos/{owner}/{repo}/dependabot/version-updates \
   --field package_ecosystem=cargo
 ```
 
-Or wait until Monday 2 AM UTC for the scheduled run.
+Or wait until Sunday 10 PM UTC for the scheduled run.
 
 ### Test 2: Check Workflow Runs
 
@@ -177,7 +177,7 @@ gh run view --log
 
 After setup, you should see:
 
-- ✅ Weekly Dependabot PRs (grouped, every Monday)
+- ✅ Weekly Dependabot PRs (grouped, every Sunday)
 - ✅ PRs automatically approved and merged (after CI passes)
 - ✅ Patch version bumped automatically
 - ✅ New releases created on GitHub
@@ -188,7 +188,7 @@ After setup, you should see:
 
 Once setup is complete:
 
-1. Wait for next scheduled Dependabot run (Monday 2 AM UTC)
+1. Wait for next scheduled Dependabot run (Sunday 10 PM UTC)
 2. Or manually trigger: Close and reopen an existing Dependabot PR
 3. Monitor first automated cycle
 4. Adjust configuration as needed
