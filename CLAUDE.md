@@ -105,7 +105,11 @@ Version is computed dynamically via `build.rs` using:
 4. Fallback: `0.0.0-dev-<short-sha>`
 
 Releases are automated: bump version in Cargo.toml, merge to main, CI
-handles tagging and publishing. To bump the version:
+handles tagging and publishing.
+
+**IMPORTANT:** Always use `cog bump` for version management. Never use
+`cargo set-version` directly - it doesn't create tags or follow the
+project's versioning workflow.
 
 ```bash
 cog bump --patch   # 0.0.1 -> 0.0.2
