@@ -97,25 +97,24 @@ Key dependencies:
 
 ## Version Management
 
-Version is computed dynamically via `build.rs` using:
-
-1. `BUILD_VERSION` env var (CI)
-2. GitHub API (in GitHub Actions)
-3. Cargo.toml version + git SHA
-4. Fallback: `0.0.0-dev-<short-sha>`
-
-Releases are automated: bump version in Cargo.toml, merge to main, CI
-handles tagging and publishing.
-
-**IMPORTANT:** Always use `cog bump` for version management. Never use
-`cargo set-version` directly - it doesn't create tags or follow the
-project's versioning workflow.
+Use `cargo version-info bump` for version management. This command
+updates Cargo.toml and creates a commit, but does NOT create tags
+(tags are created by CI after tests pass).
 
 ```bash
-cog bump --patch   # 0.0.1 -> 0.0.2
-cog bump --minor   # 0.1.0 -> 0.2.0
-cog bump --major   # 1.0.0 -> 2.0.0
+cargo version-info bump --patch   # 0.0.1 -> 0.0.2
+cargo version-info bump --minor   # 0.1.0 -> 0.2.0
+cargo version-info bump --major   # 1.0.0 -> 2.0.0
 ```
+
+**Do NOT use `cog bump`** - it creates local tags which conflict
+with CI's tag creation workflow.
+
+**Workflow:**
+
+1. Create PR with version bump commit
+2. Merge PR to main
+3. CI detects version change, creates tag, publishes release
 
 ## Git workflow
 
