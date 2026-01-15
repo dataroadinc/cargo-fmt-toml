@@ -42,7 +42,7 @@ serde = { version = "1", features = ["derive"] }
 taplo = "0.14.0"
 toml = "0.9.8"
 toml_edit = "0.24.0"
-cargo-plugin-utils = "0.0.3"
+cargo-plugin-utils = "0.0.8"
 
 [build-dependencies]
 cargo-version-info = { version = "0.0.7", default-features = false }

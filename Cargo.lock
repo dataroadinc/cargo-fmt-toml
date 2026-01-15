@@ -311,7 +311,7 @@ name = "cargo-fmt-toml"
 version = "0.0.6"
 dependencies = [
  "anyhow",
- "cargo-plugin-utils",
+ "cargo-plugin-utils 0.0.8",
  "cargo-version-info",
  "clap",
  "serde",
@@ -350,6 +350,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "cargo-plugin-utils"
+version = "0.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "745c9aefe2f0bc447a2eef403fe01fa96b7740982f3d1c131dff4ea9de7373d3"
+dependencies = [
+ "anyhow",
+ "atty",
+ "cargo_metadata",
+ "carlog",
+ "console",
+ "gix",
+ "indicatif",
+ "portable-pty",
+ "sloughi",
+ "tokio",
+]
+
+[[package]]
 name = "cargo-version-info"
 version = "0.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -357,7 +375,7 @@ checksum = "32e4c339f72d7421dda339da49431fc2523edceff02c6f099dd75f78bb0b82b0"
 dependencies = [
  "anyhow",
  "bstr",
- "cargo-plugin-utils",
+ "cargo-plugin-utils 0.0.3",
  "cargo_metadata",
  "carlog",
  "clap",
