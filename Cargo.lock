@@ -311,7 +311,7 @@ name = "cargo-fmt-toml"
 version = "0.0.7"
 dependencies = [
  "anyhow",
- "cargo-plugin-utils 0.0.8",
+ "cargo-plugin-utils",
  "cargo-version-info",
  "clap",
  "serde",
@@ -329,24 +329,6 @@ checksum = "87a0c0e6148f11f01f32650a2ea02d532b2ad4e81d8bd41e6e565b5adc5e6082"
 dependencies = [
  "serde",
  "serde_core",
-]
-
-[[package]]
-name = "cargo-plugin-utils"
-version = "0.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5cbf0e42b1a8f95d44274dce2c95aabc6e693a0043c03a3e773439d83ede81f8"
-dependencies = [
- "anyhow",
- "atty",
- "cargo_metadata",
- "carlog",
- "console",
- "gix",
- "indicatif",
- "portable-pty",
- "sloughi",
- "tokio",
 ]
 
 [[package]]
@@ -369,13 +351,13 @@ dependencies = [
 
 [[package]]
 name = "cargo-version-info"
-version = "0.0.7"
+version = "0.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e4c339f72d7421dda339da49431fc2523edceff02c6f099dd75f78bb0b82b0"
+checksum = "2c76072d514acb1d3e8f563d6ced0d9eac6417e85ff08371d3393089a22659ad"
 dependencies = [
  "anyhow",
  "bstr",
- "cargo-plugin-utils 0.0.3",
+ "cargo-plugin-utils",
  "cargo_metadata",
  "carlog",
  "clap",
