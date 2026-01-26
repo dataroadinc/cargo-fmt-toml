@@ -57,27 +57,9 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        rust: [stable]
     steps:
       - uses: actions/checkout@v6
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
-      - name: Cache cargo registry
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-      - name: Cache cargo index
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-      - name: Cache target directory
-        uses: actions/cache@v5
-        with:
-          path: target
-          key: ${{ runner.os }}-${{ matrix.rust }}-target-test-${{ hashFiles('**/Cargo.lock') }}
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
       - name: Run tests
         run: cargo test
       - name: Run doc tests
@@ -199,7 +181,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Publish to crates.io
         run: cargo publish --allow-dirty
@@ -241,10 +223,10 @@ jobs:
           ref: refs/tags/v${{ needs.version-check.outputs.new_version }}
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@master
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          toolchain: stable
-          targets: ${{ matrix.platform.target }}
+          target: ${{ matrix.platform.target }}
+          cache: false  # Using Swatinem/rust-cache below for custom config
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
