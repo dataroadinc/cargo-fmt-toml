@@ -182,10 +182,21 @@ fn format_manifest(
     if changes > 0 {
         logger.println(&format!("\n📦 {}", manifest_path.display()));
 
+        let output = doc.to_string();
+
+        // Validate the output is valid TOML before writing to disk.
+        // This prevents corrupting the file when an internal
+        // transformation produces invalid content.
+        output.parse::<DocumentMut>().context(format!(
+            "Internal error: formatted output for {:?} is not valid TOML. \
+             File was NOT modified. Please report this as a bug.",
+            manifest_path
+        ))?;
+
         if args.dry_run || args.check {
             logger.println(&format!("   Would format with {} changes", changes));
         } else {
-            std::fs::write(manifest_path, doc.to_string())
+            std::fs::write(manifest_path, &output)
                 .context(format!("Failed to write {:?}", manifest_path))?;
             logger.println(&format!("   💾 Formatted with {} changes", changes));
         }
@@ -806,6 +817,390 @@ serde = \"1.0\"
         assert!(
             result.contains("keywords"),
             "missing keywords in:\n{result}"
+        );
+    }
+
+    /// Helper that runs the full formatting pipeline on a TOML string
+    /// (collapse + reorder + format_package + sort) and returns the
+    /// result.
+    fn full_format(input: &str) -> String {
+        let mut doc = input.parse::<DocumentMut>().expect("valid TOML");
+        let mut logger = ProgressLogger::new(true);
+        collapse_nested_tables(&mut doc, &mut logger).expect("collapse succeeded");
+        reorder_sections(&mut doc, &mut logger).expect("reorder succeeded");
+        format_package_section(&mut doc, &mut logger).expect("format_package succeeded");
+        sort_dependencies(&mut doc, "dependencies", &mut logger).expect("sort deps succeeded");
+        sort_dependencies(&mut doc, "dev-dependencies", &mut logger)
+            .expect("sort dev-deps succeeded");
+        sort_dependencies(&mut doc, "build-dependencies", &mut logger)
+            .expect("sort build-deps succeeded");
+        doc.to_string()
+    }
+
+    #[test]
+    fn full_pipeline_workspace_lints_with_comments() {
+        // Reproduces the reported bug: a workspace Cargo.toml with
+        // [workspace.lints.clippy] entries containing trailing
+        // comments after quoted string values was causing parse
+        // errors during reordering.
+        let input = "\
+[package]
+name = \"my-workspace\"
+version = \"0.0.0\"
+publish = false
+
+[workspace]
+members = [\"crate-a\", \"crate-b\"]
+resolver = \"3\"
+
+[workspace.lints.clippy]
+missing_crate_level_docs = \"deny\" # require crate-level docs
+disallowed_types = { level = \"warn\", priority = 1 }
+
+[workspace.lints.rust]
+missing_docs = \"warn\"
+unsafe_code = \"forbid\" # never allow unsafe
+
+[workspace.package]
+rust-version = \"1.93.0\"
+edition = \"2024\"
+license = \"Apache-2.0\"
+
+[workspace.dependencies]
+serde = { version = \"1.0\", features = [\"derive\"] }
+tokio = { version = \"1.0\", features = [\"full\"] }
+anyhow = \"1.0\"
+
+[profile.release]
+opt-level = 3
+";
+        let result = full_format(input);
+
+        // Verify all sections are preserved
+        assert!(
+            result.contains("[workspace.lints.clippy]"),
+            "missing [workspace.lints.clippy] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.lints.rust]"),
+            "missing [workspace.lints.rust] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.package]"),
+            "missing [workspace.package] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.dependencies]"),
+            "missing [workspace.dependencies] in:\n{result}"
+        );
+        assert!(
+            result.contains("[profile.release]"),
+            "missing [profile.release] in:\n{result}"
+        );
+        // Verify comments are preserved
+        assert!(
+            result.contains("# require crate-level docs"),
+            "missing trailing comment in:\n{result}"
+        );
+        assert!(
+            result.contains("# never allow unsafe"),
+            "missing trailing comment in:\n{result}"
+        );
+        // Verify values are preserved
+        assert!(
+            result.contains("missing_crate_level_docs"),
+            "missing lint entry in:\n{result}"
+        );
+        assert!(
+            result.contains("priority = 1"),
+            "missing priority in:\n{result}"
+        );
+    }
+
+    #[test]
+    fn full_pipeline_lints_out_of_order() {
+        // When [lints.clippy] appears before [package], the tool
+        // must reorder correctly without corrupting values.
+        let input = "\
+[lints.clippy]
+needless_pass_by_value = \"warn\"
+missing_errors_doc = \"warn\"
+
+[lints.rust]
+unsafe_code = \"forbid\"
+
+[package]
+name = \"test-crate\"
+version = \"0.1.0\"
+edition = \"2024\"
+
+[dependencies]
+serde = { version = \"1.0\", features = [\"derive\"] }
+tokio = \"1.0\"
+anyhow = \"1.0\"
+";
+        let result = full_format(input);
+
+        // [package] should come before [dependencies]
+        let pkg_pos = result.find("[package]").expect("missing [package]");
+        let dep_pos = result
+            .find("[dependencies]")
+            .expect("missing [dependencies]");
+        assert!(
+            pkg_pos < dep_pos,
+            "[package] should come before [dependencies]"
+        );
+        // lints should still be present
+        assert!(
+            result.contains("[lints.clippy]"),
+            "missing [lints.clippy] in:\n{result}"
+        );
+        assert!(
+            result.contains("[lints.rust]"),
+            "missing [lints.rust] in:\n{result}"
+        );
+        assert!(
+            result.contains("needless_pass_by_value"),
+            "missing lint entry in:\n{result}"
+        );
+        // dependencies should be sorted
+        let anyhow_pos = result.find("anyhow").expect("missing anyhow");
+        let serde_pos = result.find("serde").expect("missing serde");
+        let tokio_pos = result.find("tokio").expect("missing tokio");
+        assert!(
+            anyhow_pos < serde_pos && serde_pos < tokio_pos,
+            "dependencies should be sorted alphabetically"
+        );
+    }
+
+    #[test]
+    fn full_pipeline_workspace_lints_explicit_tables() {
+        // Test with [workspace.lints.clippy.disallowed-names] as an
+        // explicit sub-table (not inline) — this is how toml_edit
+        // may serialize certain lint configurations.
+        let input = "\
+[workspace]
+members = [\"crate-a\"]
+resolver = \"3\"
+
+[workspace.lints.clippy]
+needless_pass_by_value = \"warn\"
+
+[workspace.lints.clippy.disallowed-names]
+level = \"warn\"
+priority = -1
+
+[workspace.lints.clippy.disallowed_types]
+level = \"warn\"
+priority = 1
+
+[workspace.lints.rust]
+missing_docs = \"warn\"
+
+[workspace.package]
+edition = \"2024\"
+
+[package]
+name = \"my-workspace\"
+version = \"0.0.0\"
+
+[dependencies]
+serde = \"1.0\"
+";
+        let result = full_format(input);
+
+        assert!(
+            result.contains("disallowed-names"),
+            "missing disallowed-names in:\n{result}"
+        );
+        assert!(
+            result.contains("disallowed_types"),
+            "missing disallowed_types in:\n{result}"
+        );
+        assert!(
+            result.contains("priority = -1"),
+            "missing priority = -1 in:\n{result}"
+        );
+        assert!(
+            result.contains("priority = 1"),
+            "missing priority = 1 in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.package]"),
+            "missing [workspace.package] in:\n{result}"
+        );
+    }
+
+    #[test]
+    fn reorder_preserves_non_contiguous_dotted_sections() {
+        // When [workspace] appears early and [workspace.package]
+        // appears much later (separated by non-workspace sections),
+        // both must be grouped together in the output.
+        let input = "\
+[package]
+name = \"test\"
+version = \"0.0.0\"
+
+[dependencies]
+serde = \"1.0\"
+
+[workspace]
+members = [\"a\"]
+
+[features]
+default = []
+
+[workspace.package]
+edition = \"2024\"
+
+[workspace.dependencies]
+anyhow = \"1.0\"
+";
+        let result = reorder(input);
+
+        assert!(
+            result.contains("[workspace.package]"),
+            "missing [workspace.package] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.dependencies]"),
+            "missing [workspace.dependencies] in:\n{result}"
+        );
+        assert!(
+            result.contains("edition = \"2024\""),
+            "missing edition in:\n{result}"
+        );
+    }
+
+    #[test]
+    fn non_contiguous_workspace_sections_across_profile() {
+        // Mimics the reported scenario: [workspace] at the top,
+        // [profile] in the middle, then [workspace.package] and
+        // [workspace.lints.*] and [workspace.dependencies] after.
+        // The parser must group all workspace.* sections with
+        // [workspace] even when [profile] separates them.
+        let input = "\
+[package]
+name = \"my-workspace\"
+version = \"0.0.0\"
+publish = false
+
+[workspace]
+members = [
+    \"crate-a\",
+    \"crate-b\",
+]
+resolver = \"3\"
+
+[profile]
+
+[workspace.package]
+rust-version = \"1.93.0\"
+edition = \"2024\"
+license = \"Apache-2.0\"
+authors = [\"Test Author <test@example.com>\"]
+
+[workspace.lints.clippy]
+missing_errors_doc = \"warn\"
+needless_pass_by_value = \"warn\"
+disallowed_types = { level = \"warn\", priority = 1 }
+
+[workspace.lints.rust]
+missing_docs = \"warn\"
+unsafe_code = \"forbid\"
+
+[workspace.dependencies]
+anyhow = \"1.0\"
+clap = { version = \"4.0\", features = [\"derive\"] }
+serde = { version = \"1.0\", features = [\"derive\"] }
+tokio = { version = \"1.0\", features = [\"full\"] }
+tracing = \"0.1\"
+";
+        let result = full_format(input);
+
+        // All workspace sub-sections must be present
+        assert!(
+            result.contains("[workspace.package]"),
+            "missing [workspace.package] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.lints.clippy]"),
+            "missing [workspace.lints.clippy] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.lints.rust]"),
+            "missing [workspace.lints.rust] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.dependencies]"),
+            "missing [workspace.dependencies] in:\n{result}"
+        );
+        assert!(
+            result.contains("[profile]"),
+            "missing [profile] in:\n{result}"
+        );
+        // Verify content
+        assert!(
+            result.contains("rust-version"),
+            "missing rust-version in:\n{result}"
+        );
+        assert!(
+            result.contains("disallowed_types"),
+            "missing disallowed_types in:\n{result}"
+        );
+        assert!(
+            result.contains("tracing"),
+            "missing tracing dep in:\n{result}"
+        );
+    }
+
+    #[test]
+    fn full_pipeline_output_is_valid_toml() {
+        // Verify the full pipeline produces valid TOML that can be
+        // parsed back without errors.
+        let input = "\
+[package]
+name = \"test-workspace\"
+version = \"0.0.0\"
+publish = false
+
+[workspace]
+members = [
+    \"crate-a\",
+    \"crate-b\",
+]
+resolver = \"3\"
+
+[profile]
+
+[workspace.package]
+rust-version = \"1.93.0\"
+edition = \"2024\"
+license = \"Apache-2.0\"
+
+[workspace.lints.clippy]
+missing_errors_doc = \"warn\"
+missing_crate_level_docs = \"deny\" # require crate-level docs
+disallowed_types = { level = \"warn\", priority = 1 }
+
+[workspace.lints.rust]
+missing_docs = \"warn\"
+unsafe_code = \"forbid\" # never allow unsafe
+
+[workspace.dependencies]
+serde = { version = \"1.0\", features = [\"derive\"] }
+tokio = { version = \"1.0\" }
+anyhow = \"1.0\"
+";
+        // Run the full pipeline
+        let result = full_format(input);
+
+        // Verify the output is valid TOML
+        let reparsed = result.parse::<DocumentMut>();
+        assert!(
+            reparsed.is_ok(),
+            "Output is not valid TOML:\n{result}\nError: {}",
+            reparsed.unwrap_err()
         );
     }
 }
