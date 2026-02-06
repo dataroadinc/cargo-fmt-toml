@@ -339,11 +339,29 @@ fn reorder_sections(doc: &mut DocumentMut, logger: &mut ProgressLogger) -> Resul
         let trimmed = line.trim();
 
         let header_name = if trimmed.starts_with("[[") {
-            // Array-of-tables header like [[bin]]
-            trimmed.find("]]").map(|end| trimmed[2..end].to_string())
+            // Potential array-of-tables header like [[bin]].
+            // Real headers end with ]] optionally followed by
+            // whitespace or a comment — nothing else.
+            trimmed.find("]]").and_then(|end| {
+                let after = trimmed[end + 2..].trim_start();
+                if after.is_empty() || after.starts_with('#') {
+                    Some(trimmed[2..end].to_string())
+                } else {
+                    None // Value line, e.g. [[1, 2], [3, 4]]
+                }
+            })
         } else if trimmed.starts_with('[') {
-            // Standard table header like [package] or [workspace.package]
-            trimmed.find(']').map(|end| trimmed[1..end].to_string())
+            // Potential standard table header like [package].
+            // Real headers end with ] optionally followed by
+            // whitespace or a comment — nothing else.
+            trimmed.find(']').and_then(|end| {
+                let after = trimmed[end + 1..].trim_start();
+                if after.is_empty() || after.starts_with('#') {
+                    Some(trimmed[1..end].to_string())
+                } else {
+                    None // Value line, e.g. ["a", "b"]
+                }
+            })
         } else {
             None
         };
@@ -639,6 +657,155 @@ tokio = { version = \"1.0\" }
         assert!(
             result.contains("edition = \"2024\""),
             "missing edition field:\n{result}"
+        );
+    }
+
+    #[test]
+    fn lints_clippy_with_inline_priority_preserved() {
+        // Reproduces the reported bug: a [lints.clippy] section with
+        // entries like `disallowed_types = { level = "warn", priority = 1 }`
+        // was causing "Failed to parse reordered document" errors.
+        // The line-based parser must not misidentify value lines
+        // containing brackets as section headers.
+        let input = "\
+[lints.clippy]
+disallowed_types = { level = \"warn\", priority = 1 }
+disallowed-names = { level = \"warn\", priority = -1 }
+
+[package]
+name = \"test-crate\"
+version = \"0.1.0\"
+
+[dependencies]
+serde = \"1.0\"
+";
+        let result = reorder(input);
+
+        assert!(
+            result.contains("[lints.clippy]"),
+            "missing [lints.clippy] in:\n{result}"
+        );
+        assert!(
+            result.contains("priority = 1"),
+            "missing priority = 1 in:\n{result}"
+        );
+        assert!(
+            result.contains("priority = -1"),
+            "missing priority = -1 in:\n{result}"
+        );
+        assert!(
+            result.contains("[package]"),
+            "missing [package] in:\n{result}"
+        );
+        assert!(
+            result.contains("[dependencies]"),
+            "missing [dependencies] in:\n{result}"
+        );
+    }
+
+    #[test]
+    fn multiline_arrays_not_misidentified_as_headers() {
+        // Value lines starting with [ (array elements, nested arrays)
+        // must not be misidentified as section headers.
+        let input = "\
+[package]
+name = \"test\"
+categories = [
+    \"command-line-utilities\",
+    \"development-tools\",
+]
+
+[features]
+default = [\"std\"]
+
+[dependencies]
+serde = \"1.0\"
+";
+        let result = reorder(input);
+
+        assert!(
+            result.contains("categories"),
+            "missing categories in:\n{result}"
+        );
+        assert!(
+            result.contains("command-line-utilities"),
+            "missing array element in:\n{result}"
+        );
+        assert!(
+            result.contains("[features]"),
+            "missing [features] in:\n{result}"
+        );
+    }
+
+    #[test]
+    fn nested_array_values_not_misidentified_as_headers() {
+        // Nested arrays like [[1, 2], [3, 4]] should not be treated
+        // as [[array-of-tables]] headers.
+        let input = "\
+[package]
+name = \"test\"
+
+[metadata]
+matrix = [
+    [1, 2],
+    [3, 4],
+]
+
+[dependencies]
+serde = \"1.0\"
+";
+        let result = reorder(input);
+
+        assert!(
+            result.contains("[metadata]"),
+            "missing [metadata] in:\n{result}"
+        );
+        assert!(
+            result.contains("[1, 2]"),
+            "missing nested array [1, 2] in:\n{result}"
+        );
+        assert!(
+            result.contains("[3, 4]"),
+            "missing nested array [3, 4] in:\n{result}"
+        );
+    }
+
+    #[test]
+    fn multiline_feature_arrays_with_brackets() {
+        // Feature arrays with entries in brackets on their own line
+        // must not be misidentified as section headers. This
+        // reproduces the reported "invalid multi-line basic string"
+        // error when inline tables get expanded to multi-line.
+        let input = "\
+[package]
+name = \"test\"
+keywords = [
+    \"cargo\",
+    \"toml\",
+]
+
+[features]
+full = [
+    \"derive\",
+    \"std\",
+]
+
+[dependencies]
+serde = \"1.0\"
+";
+        let result = reorder(input);
+
+        assert!(
+            result.contains("[features]"),
+            "missing [features] in:\n{result}"
+        );
+        assert!(
+            result.contains("\"derive\""),
+            "missing derive feature in:\n{result}"
+        );
+        assert!(
+            result.contains("keywords"),
+            "missing keywords in:\n{result}"
         );
     }
 }
