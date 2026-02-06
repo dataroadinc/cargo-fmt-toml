@@ -319,49 +319,68 @@ fn reorder_sections(doc: &mut DocumentMut, logger: &mut ProgressLogger) -> Resul
         return Ok(0);
     }
 
-    // Manually reconstruct the document string in the desired order
-    // This preserves all formatting including inline tables
+    // Manually reconstruct the document string in the desired order.
+    // This preserves all formatting including inline tables.
+    //
+    // Dotted section headers like [workspace.package] belong to their
+    // top-level parent key (workspace). We group them together so that
+    // the rebuild loop emits all sub-sections with their parent.
     let original_str = doc.to_string();
     let mut section_strings: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
-    // Split the document into sections manually by finding section headers
-    let mut current_section = String::new();
-    let mut current_section_name = String::new();
+    // Split the document into sections manually by finding section
+    // headers. Each top-level key accumulates its own content plus
+    // any dotted sub-sections (e.g. [workspace.package]).
+    let mut current_content = String::new();
+    let mut current_top_level_key = String::new();
 
     for line in original_str.lines() {
         let trimmed = line.trim();
-        if trimmed.starts_with('[') && !trimmed.starts_with("[[") {
-            // This is a new section header (not array-of-tables)
-            if !current_section_name.is_empty() {
-                section_strings.insert(current_section_name.clone(), current_section.clone());
-            }
-            // Extract section name
-            if let Some(end_bracket) = trimmed.find(']') {
-                current_section_name = trimmed[1..end_bracket].to_string();
-                current_section = format!("{}\n", line);
-            }
-        } else if trimmed.starts_with("[[") {
-            // Array-of-tables - treat specially (could be [[bin]], [[test]], etc.)
-            if !current_section_name.is_empty() {
-                section_strings.insert(current_section_name.clone(), current_section.clone());
-                current_section_name.clear();
-            }
-            // Extract array-of-tables section name
-            if let Some(end_bracket) = trimmed.find("]]") {
-                let section_name = trimmed[2..end_bracket].to_string();
-                current_section = format!("{}\n", line);
-                current_section_name = section_name;
+
+        let header_name = if trimmed.starts_with("[[") {
+            // Array-of-tables header like [[bin]]
+            trimmed.find("]]").map(|end| trimmed[2..end].to_string())
+        } else if trimmed.starts_with('[') {
+            // Standard table header like [package] or [workspace.package]
+            trimmed.find(']').map(|end| trimmed[1..end].to_string())
+        } else {
+            None
+        };
+
+        if let Some(name) = header_name {
+            // Determine the top-level key for this header
+            let top_level = name.split('.').next().unwrap_or(&name).to_string();
+
+            if top_level != current_top_level_key {
+                // Starting a new top-level group — save the previous one
+                if !current_top_level_key.is_empty() {
+                    section_strings
+                        .entry(current_top_level_key.clone())
+                        .and_modify(|existing| existing.push_str(&current_content))
+                        .or_insert_with(|| current_content.clone());
+                }
+                current_top_level_key = top_level;
+                current_content = format!("{}\n", line);
+            } else {
+                // Same top-level group (e.g. [workspace.package] after
+                // [workspace]) — append to current content
+                current_content.push_str(line);
+                current_content.push('\n');
             }
         } else {
-            current_section.push_str(line);
-            current_section.push('\n');
+            // Regular content line — append to current section
+            current_content.push_str(line);
+            current_content.push('\n');
         }
     }
 
     // Don't forget the last section
-    if !current_section_name.is_empty() {
-        section_strings.insert(current_section_name, current_section);
+    if !current_top_level_key.is_empty() {
+        section_strings
+            .entry(current_top_level_key)
+            .and_modify(|existing| existing.push_str(&current_content))
+            .or_insert(current_content);
     }
 
     // Rebuild in the desired order
@@ -480,4 +499,146 @@ fn sort_table_in_place(table: &mut Table, logger: &mut ProgressLogger) -> Result
     }
 
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper that runs `reorder_sections` on the given TOML string
+    /// and returns the resulting TOML string.
+    fn reorder(input: &str) -> String {
+        let mut doc = input.parse::<DocumentMut>().expect("valid TOML");
+        let mut logger = ProgressLogger::new(true);
+        reorder_sections(&mut doc, &mut logger).expect("reorder succeeded");
+        doc.to_string()
+    }
+
+    #[test]
+    fn workspace_dotted_sections_preserved() {
+        let input = "\
+[package]
+name = \"test-workspace\"
+version = \"0.0.0\"
+
+[workspace]
+members = [\"crate-a\"]
+resolver = \"3\"
+
+[profile]
+
+[workspace.package]
+rust-version = \"1.93.0\"
+edition = \"2024\"
+
+[workspace.dependencies]
+serde = { version = \"1.0\", features = [\"derive\"] }
+tokio = { version = \"1.0\" }
+";
+        let result = reorder(input);
+
+        // All dotted workspace sections must be present
+        assert!(
+            result.contains("[workspace.package]"),
+            "missing [workspace.package] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.dependencies]"),
+            "missing [workspace.dependencies] in:\n{result}"
+        );
+        assert!(
+            result.contains("rust-version"),
+            "missing rust-version field in:\n{result}"
+        );
+        assert!(
+            result.contains("serde"),
+            "missing serde dependency in:\n{result}"
+        );
+        assert!(
+            result.contains("tokio"),
+            "missing tokio dependency in:\n{result}"
+        );
+        assert!(
+            result.contains("[profile]"),
+            "missing [profile] in:\n{result}"
+        );
+    }
+
+    #[test]
+    fn sections_not_in_order_list_are_preserved() {
+        let input = "\
+[package]
+name = \"test\"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = \"1.0\"
+";
+        let result = reorder(input);
+
+        assert!(
+            result.contains("[lints]"),
+            "missing [lints] section in:\n{result}"
+        );
+        assert!(
+            result.contains("workspace = true"),
+            "missing lints content in:\n{result}"
+        );
+    }
+
+    #[test]
+    fn no_truncation_with_many_dotted_sections() {
+        let input = "\
+[package]
+name = \"big-workspace\"
+version = \"0.0.0\"
+
+[workspace]
+members = [\"a\", \"b\", \"c\"]
+resolver = \"3\"
+
+[profile.release]
+opt-level = 3
+
+[profile.dev]
+opt-level = 0
+
+[workspace.package]
+edition = \"2024\"
+license = \"MIT\"
+
+[workspace.dependencies]
+anyhow = \"1.0\"
+clap = { version = \"4.0\", features = [\"derive\"] }
+serde = { version = \"1.0\" }
+tokio = { version = \"1.0\" }
+";
+        let result = reorder(input);
+
+        // Verify nothing is lost
+        assert!(
+            result.contains("[workspace.package]"),
+            "missing [workspace.package]:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.dependencies]"),
+            "missing [workspace.dependencies]:\n{result}"
+        );
+        assert!(
+            result.contains("[profile.release]"),
+            "missing [profile.release]:\n{result}"
+        );
+        assert!(
+            result.contains("[profile.dev]"),
+            "missing [profile.dev]:\n{result}"
+        );
+        assert!(result.contains("anyhow"), "missing anyhow dep:\n{result}");
+        assert!(result.contains("tokio"), "missing tokio dep:\n{result}");
+        assert!(
+            result.contains("edition = \"2024\""),
+            "missing edition field:\n{result}"
+        );
+    }
 }
