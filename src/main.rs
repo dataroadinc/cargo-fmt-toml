@@ -90,21 +90,39 @@ fn fmt_toml(args: FmtArgs) -> Result<()> {
         .map(|pkg| pkg.manifest_path.as_std_path().to_path_buf())
         .collect();
 
-    let mut total_changes = 0;
-    let mut files_changed = 0;
+    // Phase 1: Format all manifests and collect results.
+    // No files are written yet — if any manifest fails to format,
+    // no files will be modified on disk (atomic behavior).
+    let mut results: Vec<(PathBuf, String, usize)> = Vec::new();
 
     logger.set_progress(crate_manifests.len() as u64);
     logger.set_message("🔍 Formatting Cargo.toml files");
 
     for manifest_path in &crate_manifests {
         logger.inc();
-        let changes = format_manifest(manifest_path, &args, &mut logger)?;
+        let (output, changes) = format_manifest(manifest_path, &mut logger)?;
         if changes > 0 {
-            total_changes += changes;
-            files_changed += 1;
+            results.push((manifest_path.clone(), output, changes));
         }
     }
     logger.finish();
+
+    let total_changes: usize = results.iter().map(|(_, _, c)| c).sum();
+    let files_changed = results.len();
+
+    // Phase 2: Write all formatted files to disk.
+    if !args.dry_run && !args.check {
+        for (path, output, changes) in &results {
+            std::fs::write(path, output).context(format!("Failed to write {:?}", path))?;
+            logger.println(&format!("\n📦 {}", path.display()));
+            logger.println(&format!("   💾 Formatted with {} changes", changes));
+        }
+    } else {
+        for (path, _, changes) in &results {
+            logger.println(&format!("\n📦 {}", path.display()));
+            logger.println(&format!("   Would format with {} changes", changes));
+        }
+    }
 
     // In quiet mode, show nothing. Otherwise show summary.
     if !args.quiet {
@@ -133,11 +151,9 @@ fn fmt_toml(args: FmtArgs) -> Result<()> {
     Ok(())
 }
 
-fn format_manifest(
-    manifest_path: &Path,
-    args: &FmtArgs,
-    logger: &mut ProgressLogger,
-) -> Result<usize> {
+/// Format a single manifest and return the formatted output string
+/// along with the number of changes made. Does NOT write to disk.
+fn format_manifest(manifest_path: &Path, logger: &mut ProgressLogger) -> Result<(String, usize)> {
     let content = std::fs::read_to_string(manifest_path)
         .context(format!("Failed to read {:?}", manifest_path))?;
 
@@ -179,12 +195,10 @@ fn format_manifest(
         }
     }
 
+    let output = doc.to_string();
+
     if changes > 0 {
-        logger.println(&format!("\n📦 {}", manifest_path.display()));
-
-        let output = doc.to_string();
-
-        // Validate the output is valid TOML before writing to disk.
+        // Validate the output is valid TOML before returning.
         // This prevents corrupting the file when an internal
         // transformation produces invalid content.
         output.parse::<DocumentMut>().context(format!(
@@ -192,17 +206,9 @@ fn format_manifest(
              File was NOT modified. Please report this as a bug.",
             manifest_path
         ))?;
-
-        if args.dry_run || args.check {
-            logger.println(&format!("   Would format with {} changes", changes));
-        } else {
-            std::fs::write(manifest_path, &output)
-                .context(format!("Failed to write {:?}", manifest_path))?;
-            logger.println(&format!("   💾 Formatted with {} changes", changes));
-        }
     }
 
-    Ok(changes)
+    Ok((output, changes))
 }
 
 fn collapse_nested_tables(doc: &mut DocumentMut, logger: &mut ProgressLogger) -> Result<usize> {
@@ -292,7 +298,7 @@ fn collapse_table_entries(table: &mut Table) -> usize {
 }
 
 fn reorder_sections(doc: &mut DocumentMut, logger: &mut ProgressLogger) -> Result<usize> {
-    // Define the desired section order
+    // Define the desired section order for top-level keys.
     let section_order = vec![
         "package",
         "lib",
@@ -307,126 +313,83 @@ fn reorder_sections(doc: &mut DocumentMut, logger: &mut ProgressLogger) -> Resul
         "features",
     ];
 
-    // Get current top-level keys
+    // Get current top-level keys from the document.  doc.iter()
+    // correctly identifies top-level keys including dotted sections
+    // like [workspace.package] grouped under "workspace".
     let current_keys: Vec<String> = doc.iter().map(|(k, _)| k.to_string()).collect();
 
-    // Build expected order: ordered sections first, then any extra sections
+    // Build expected order: ordered sections first, then any extra
+    // sections (workspace, profile, lints, patch, etc.) in their
+    // original relative order.
     let mut expected_keys = Vec::new();
     for section in &section_order {
         if current_keys.contains(&section.to_string()) {
             expected_keys.push(section.to_string());
         }
     }
-
-    // Add any keys not in section_order at the end
     for key in &current_keys {
         if !section_order.contains(&key.as_str()) {
             expected_keys.push(key.clone());
         }
     }
 
-    // Check if reordering is needed
+    // Check if reordering is needed.
     if current_keys == expected_keys {
         return Ok(0);
     }
 
-    // Manually reconstruct the document string in the desired order.
-    // This preserves all formatting including inline tables.
+    // Serialize each top-level key individually and reassemble in
+    // the desired order.  We use toml_edit's own serialization per
+    // key, which correctly handles dotted sub-sections, inline
+    // tables, array-of-tables, multi-line values, and comments.
     //
-    // Dotted section headers like [workspace.package] belong to their
-    // top-level parent key (workspace). We group them together so that
-    // the rebuild loop emits all sub-sections with their parent.
-    let original_str = doc.to_string();
-    let mut section_strings: std::collections::HashMap<String, String> =
+    // For each key we build a temporary document containing only
+    // that key, serialize it, and collect the text fragment.
+    let mut section_fragments: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
-    // Split the document into sections manually by finding section
-    // headers. Each top-level key accumulates its own content plus
-    // any dotted sub-sections (e.g. [workspace.package]).
-    let mut current_content = String::new();
-    let mut current_top_level_key = String::new();
-
-    for line in original_str.lines() {
-        let trimmed = line.trim();
-
-        let header_name = if trimmed.starts_with("[[") {
-            // Potential array-of-tables header like [[bin]].
-            // Real headers end with ]] optionally followed by
-            // whitespace or a comment — nothing else.
-            trimmed.find("]]").and_then(|end| {
-                let after = trimmed[end + 2..].trim_start();
-                if after.is_empty() || after.starts_with('#') {
-                    Some(trimmed[2..end].to_string())
-                } else {
-                    None // Value line, e.g. [[1, 2], [3, 4]]
-                }
-            })
-        } else if trimmed.starts_with('[') {
-            // Potential standard table header like [package].
-            // Real headers end with ] optionally followed by
-            // whitespace or a comment — nothing else.
-            trimmed.find(']').and_then(|end| {
-                let after = trimmed[end + 1..].trim_start();
-                if after.is_empty() || after.starts_with('#') {
-                    Some(trimmed[1..end].to_string())
-                } else {
-                    None // Value line, e.g. ["a", "b"]
-                }
-            })
-        } else {
-            None
-        };
-
-        if let Some(name) = header_name {
-            // Determine the top-level key for this header
-            let top_level = name.split('.').next().unwrap_or(&name).to_string();
-
-            if top_level != current_top_level_key {
-                // Starting a new top-level group — save the previous one
-                if !current_top_level_key.is_empty() {
-                    section_strings
-                        .entry(current_top_level_key.clone())
-                        .and_modify(|existing| existing.push_str(&current_content))
-                        .or_insert_with(|| current_content.clone());
-                }
-                current_top_level_key = top_level;
-                current_content = format!("{}\n", line);
-            } else {
-                // Same top-level group (e.g. [workspace.package] after
-                // [workspace]) — append to current content
-                current_content.push_str(line);
-                current_content.push('\n');
-            }
-        } else {
-            // Regular content line — append to current section
-            current_content.push_str(line);
-            current_content.push('\n');
+    // Remove all entries from the original document.
+    let table = doc.as_table_mut();
+    let mut entries: Vec<(toml_edit::Key, Item)> = Vec::new();
+    let keys_to_remove: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+    for key in &keys_to_remove {
+        if let Some(entry) = table.remove_entry(key) {
+            entries.push(entry);
         }
     }
 
-    // Don't forget the last section
-    if !current_top_level_key.is_empty() {
-        section_strings
-            .entry(current_top_level_key)
-            .and_modify(|existing| existing.push_str(&current_content))
-            .or_insert(current_content);
+    // Serialize each key individually.
+    for (key, item) in entries {
+        let key_name = key.to_string();
+        let mut tmp_doc = DocumentMut::new();
+        tmp_doc.insert_formatted(&key, item);
+        section_fragments.insert(key_name, tmp_doc.to_string());
     }
 
-    // Rebuild in the desired order
+    // Reassemble in the desired order.
     let mut new_content = String::new();
-    for key in &expected_keys {
-        if let Some(section_str) = section_strings.get(key) {
+    for key_name in &expected_keys {
+        if let Some(fragment) = section_fragments.get(key_name) {
             if !new_content.is_empty() && !new_content.ends_with("\n\n") {
+                // Ensure a blank line between sections.
+                if !new_content.ends_with('\n') {
+                    new_content.push('\n');
+                }
                 new_content.push('\n');
             }
-            new_content.push_str(section_str);
+            new_content.push_str(fragment.trim_start());
         }
     }
 
-    // Parse the reordered content back
+    // Ensure trailing newline.
+    if !new_content.ends_with('\n') {
+        new_content.push('\n');
+    }
+
+    // Parse the reordered content back into the document.
     *doc = new_content
         .parse::<DocumentMut>()
-        .context("Failed to parse reordered document")?;
+        .context("Internal error: reordered output is not valid TOML")?;
 
     logger.println("   ✓ Reordered sections");
 
@@ -1155,6 +1118,134 @@ tracing = \"0.1\"
     }
 
     #[test]
+    fn real_workspace_with_profile_subsections_and_lints() {
+        // Reproduces exact structure from bug report: [profile]
+        // with multiple sub-profiles, followed by comment block,
+        // then [workspace.lints.*] sections.
+        let input = "\
+########################################
+# Virtual workspace root
+########################################
+[workspace]
+members = [
+    \"crate-a\",
+    \"crate-b\",
+]
+resolver = \"3\"
+
+[package]
+name = \"my-workspace\"
+version = \"0.0.0\"
+edition = \"2024\"
+publish = false
+
+[build-dependencies]
+rhusky = \"0.0.2\"
+
+[workspace.package]
+edition = \"2024\"
+version = \"0.0.0\" # Version dynamically managed by CI
+license-file = \"LICENSE\"
+rust-version = \"1.93.0\"
+
+[workspace.dependencies]
+anyhow = \"1.0\"
+serde = { version = \"1.0\", features = [\"derive\"] }
+tokio = { version = \"1.0\", features = [\"full\"] }
+
+[profile]
+
+[profile.wasm-dev]
+inherits = \"dev\"
+opt-level = 1
+
+[profile.release]
+debug = false
+strip = \"debuginfo\"
+
+# Workspace-wide lint levels
+[workspace.lints.rust]
+warnings = \"deny\"     # never allow warnings to pass
+missing_docs = \"deny\" # require docs on all public items
+
+[workspace.lints.rustdoc]
+missing_crate_level_docs = \"deny\" # require crate-level docs
+broken_intra_doc_links = \"deny\"   # enforce valid intra-doc links
+bare_urls = \"warn\"                # prefer backticks or proper links
+
+[workspace.lints.clippy]
+missing_panics_doc = \"warn\"                         # document panics
+missing_errors_doc = \"warn\"                         # document errors
+doc_markdown = \"warn\"                               # backticks for code
+disallowed_types = { level = \"warn\", priority = 1 }
+
+[workspace.metadata.clippy]
+disallowed-types = [\"serde_json::Value\"]
+
+########################################
+# Patches for dependencies
+########################################
+[patch.crates-io]
+# No patches currently needed
+";
+        let result = full_format(input);
+
+        // All sections must survive
+        assert!(
+            result.contains("[workspace.lints.rust]"),
+            "missing [workspace.lints.rust] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.lints.rustdoc]"),
+            "missing [workspace.lints.rustdoc] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.lints.clippy]"),
+            "missing [workspace.lints.clippy] in:\n{result}"
+        );
+        assert!(
+            result.contains("[workspace.metadata.clippy]"),
+            "missing [workspace.metadata.clippy] in:\n{result}"
+        );
+        assert!(
+            result.contains("[patch.crates-io]"),
+            "missing [patch.crates-io] in:\n{result}"
+        );
+        assert!(
+            result.contains("# never allow warnings to pass"),
+            "missing trailing comment in:\n{result}"
+        );
+        // Verify output is valid TOML
+        let reparsed = result.parse::<DocumentMut>();
+        assert!(
+            reparsed.is_ok(),
+            "Output is not valid TOML:\n{result}\nError: {}",
+            reparsed.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn reorder_actual_test_file() {
+        // Test with the actual file content from /tmp that triggers
+        // the parse error.
+        let input =
+            std::fs::read_to_string("/tmp/cargo-fmt-toml-test-case.toml").unwrap_or_default();
+        if input.is_empty() {
+            // Skip if the test file doesn't exist
+            return;
+        }
+        let result = full_format(&input);
+
+        // Verify the output is valid TOML
+        let reparsed = result.parse::<DocumentMut>();
+        assert!(
+            reparsed.is_ok(),
+            "Output is not valid TOML:\n{result}\nError: {}",
+            reparsed.unwrap_err()
+        );
+    }
+
+    #[test]
     fn full_pipeline_output_is_valid_toml() {
         // Verify the full pipeline produces valid TOML that can be
         // parsed back without errors.
@@ -1202,5 +1293,193 @@ anyhow = \"1.0\"
             "Output is not valid TOML:\n{result}\nError: {}",
             reparsed.unwrap_err()
         );
+    }
+
+    #[test]
+    fn full_pipeline_is_idempotent() {
+        // Running the formatter twice must produce the same output.
+        let input = "\
+[workspace]
+members = [\"crate-a\"]
+resolver = \"3\"
+
+[package]
+name = \"test\"
+version = \"0.0.0\"
+
+[workspace.lints.clippy]
+missing_errors_doc = \"warn\"
+disallowed_types = { level = \"warn\", priority = 1 }
+
+[workspace.package]
+edition = \"2024\"
+rust-version = \"1.93.0\"
+
+[dependencies]
+tokio = \"1.0\"
+anyhow = \"1.0\"
+serde = \"1.0\"
+
+[workspace.dependencies]
+serde = { version = \"1.0\", features = [\"derive\"] }
+";
+        let first = full_format(input);
+        let second = full_format(&first);
+        assert_eq!(
+            first, second,
+            "Formatter is not idempotent.\nFirst:\n{first}\nSecond:\n{second}"
+        );
+    }
+
+    #[test]
+    fn array_of_tables_preserved() {
+        // [[bin]] and [[example]] are array-of-tables headers that
+        // must be preserved and reordered with their parent key.
+        let input = "\
+[dependencies]
+serde = \"1.0\"
+
+[[bin]]
+name = \"my-tool\"
+path = \"src/main.rs\"
+
+[[bin]]
+name = \"helper\"
+path = \"src/helper.rs\"
+
+[package]
+name = \"test\"
+version = \"0.1.0\"
+";
+        let result = full_format(input);
+
+        // [package] should come before [[bin]] and [dependencies]
+        let pkg_pos = result.find("[package]").expect("missing [package]");
+        let bin_pos = result
+            .find("[[bin]]")
+            .unwrap_or_else(|| panic!("missing [[bin]] in:\n{result}"));
+        let dep_pos = result
+            .find("[dependencies]")
+            .expect("missing [dependencies]");
+        assert!(
+            pkg_pos < bin_pos,
+            "[package] should come before [[bin]] in:\n{result}"
+        );
+        assert!(
+            bin_pos < dep_pos,
+            "[[bin]] should come before [dependencies] in:\n{result}"
+        );
+        // Both [[bin]] entries must survive
+        let bin_count = result.matches("[[bin]]").count();
+        assert_eq!(bin_count, 2, "expected 2 [[bin]] entries, got {bin_count}");
+        assert!(result.contains("my-tool"), "missing my-tool in:\n{result}");
+        assert!(result.contains("helper"), "missing helper in:\n{result}");
+        // Output must be valid TOML
+        let reparsed = result.parse::<DocumentMut>();
+        assert!(
+            reparsed.is_ok(),
+            "Output is not valid TOML:\n{result}\nError: {}",
+            reparsed.unwrap_err()
+        );
+    }
+
+    #[test]
+    fn all_reorder_tests_produce_valid_toml() {
+        // Verify every test scenario produces valid TOML output,
+        // not just that expected strings are present.
+        let inputs = [
+            // workspace_dotted_sections_preserved
+            "\
+[package]
+name = \"test-workspace\"
+version = \"0.0.0\"
+
+[workspace]
+members = [\"crate-a\"]
+resolver = \"3\"
+
+[profile]
+
+[workspace.package]
+rust-version = \"1.93.0\"
+edition = \"2024\"
+
+[workspace.dependencies]
+serde = { version = \"1.0\", features = [\"derive\"] }
+tokio = { version = \"1.0\" }
+",
+            // sections_not_in_order_list_are_preserved
+            "\
+[package]
+name = \"test\"
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = \"1.0\"
+",
+            // lints_clippy_with_inline_priority_preserved
+            "\
+[lints.clippy]
+disallowed_types = { level = \"warn\", priority = 1 }
+disallowed-names = { level = \"warn\", priority = -1 }
+
+[package]
+name = \"test-crate\"
+version = \"0.1.0\"
+
+[dependencies]
+serde = \"1.0\"
+",
+            // non_contiguous_workspace_sections_across_profile
+            "\
+[package]
+name = \"my-workspace\"
+version = \"0.0.0\"
+publish = false
+
+[workspace]
+members = [
+    \"crate-a\",
+    \"crate-b\",
+]
+resolver = \"3\"
+
+[profile]
+
+[workspace.package]
+rust-version = \"1.93.0\"
+edition = \"2024\"
+license = \"Apache-2.0\"
+authors = [\"Test Author <test@example.com>\"]
+
+[workspace.lints.clippy]
+missing_errors_doc = \"warn\"
+needless_pass_by_value = \"warn\"
+disallowed_types = { level = \"warn\", priority = 1 }
+
+[workspace.lints.rust]
+missing_docs = \"warn\"
+unsafe_code = \"forbid\"
+
+[workspace.dependencies]
+anyhow = \"1.0\"
+clap = { version = \"4.0\", features = [\"derive\"] }
+serde = { version = \"1.0\", features = [\"derive\"] }
+tokio = { version = \"1.0\", features = [\"full\"] }
+tracing = \"0.1\"
+",
+        ];
+
+        for (idx, input) in inputs.iter().enumerate() {
+            let result = full_format(input);
+            let reparsed = result.parse::<DocumentMut>();
+            assert!(
+                reparsed.is_ok(),
+                "Scenario {idx} produced invalid TOML:\n{result}\nError: {}",
+                reparsed.unwrap_err()
+            );
+        }
     }
 }
